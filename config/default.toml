@@ -1,0 +1,40 @@
+volume = 70
+database_path = ""
+yt_dlp_path = "yt-dlp"
+
+[auth]
+# Set to chrome, edge, firefox, brave, or another yt-dlp-supported browser.
+browser = "chrome"
+seek_step = 5
+large_seek_step = 15
+
+[cache]
+enabled = true
+memory_capacity = 100
+search_ttl_seconds = 300
+
+[network]
+request_timeout_seconds = 10
+max_retries = 2
+initial_retry_delay_ms = 300
+
+[dj]
+enabled = true
+auto_queue_enabled = false
+auto_queue_size = 5
+minimum_queue_size = 2
+exploration_ratio = 0.20
+favorite_bonus = 4.0
+history_weight = 1.0
+diversity_weight = 2.0
+recent_track_penalty = 8.0
+recent_artist_penalty = 3.0
+default_strategy = "balanced"
+
+[ai]
+enabled = false
+provider = "ollama"
+model = "llama3.2"
+base_url = "http://localhost:11434"
+timeout_seconds = 30
+max_conversation_turns = 10
