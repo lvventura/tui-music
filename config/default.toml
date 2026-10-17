@@ -1,12 +1,12 @@
 volume = 70
 database_path = ""
 yt_dlp_path = "yt-dlp"
+seek_step = 5
+large_seek_step = 15
 
 [auth]
 # Set to chrome, edge, firefox, brave, or another yt-dlp-supported browser.
 browser = "chrome"
-seek_step = 5
-large_seek_step = 15
 
 [cache]
 enabled = true
@@ -38,3 +38,10 @@ model = "llama3.2"
 base_url = "http://localhost:11434"
 timeout_seconds = 30
 max_conversation_turns = 10
+
+[ui]
+# cover derives the palette from the album art; or gruvbox, nord, dracula,
+# catppuccin, tokyonight, everforest, rosepine, solarized, matrix, mono.
+theme = "cover"
+# default or vim (h/j/k/l).
+keymap = "default"

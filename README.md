@@ -19,21 +19,60 @@ cargo build --release
 cargo run
 ```
 
+## Autenticación (opcional)
+
+Búsqueda, radio y reproducción funcionan sin credenciales. La biblioteca
+personal (Liked Music) requiere una sesión:
+
+```text
+yt-dj --auth cookie            # pega la cabecera Cookie de DevTools y la valida
+yt-dj --auth clipboard         # lee esa cabecera del portapapeles (Windows)
+yt-dj --auth cookie-file FILE  # valida un cookies.txt (Netscape) exportado
+yt-dj --auth browser           # lee cookies de Firefox/Waterfox/LibreWolf/Floorp
+yt-dj --diagnose               # entorno, credenciales y biblioteca
+```
+
+La cookie se valida con `yt-dlp` antes de guardarse en
+`%APPDATA%\yt-dj\cookie.txt` (nunca en `%TEMP%`, nunca en los logs). Chrome y
+Edge no se leen directamente (cifran las cookies con *app-bound encryption* +
+DPAPI, ver yt-dlp issue 10927), así que en esas máquinas usa `--auth clipboard`
+(copia el valor de la cabecera `cookie:` en DevTools > Network) o exporta un
+`cookies.txt` con una extensión y pásalo con `--auth cookie-file`. Si no hay
+cookie guardada, la app delega en yt-dlp con `--cookies-from-browser` usando
+`[auth].browser`. Un `429` o "Sign in to confirm you're not a bot" significa
+que falta esa sesión.
+
+La tecla `L` en la TUI valida la cookie guardada o inicia el login por
+navegador como respaldo.
+
 ## Controles
 
-- `/`: activar búsqueda
-- `Enter`: buscar o seleccionar el resultado
-- `Up` / `Down`: navegar resultados
-- `Esc`: cancelar búsqueda
-- `Space`: reproducir/pausar
-- `N` / `P`: siguiente/anterior
-- `+` / `-`: volumen
-- `1` / `2` / `3` / `4` / `5`: Search / History / Favorites / Playlists / Queue
-- `F`: agregar o quitar favorito
-- `D`: eliminar el elemento seleccionado
-- `C`: crear una playlist local
-- `A`: agregar la canción actual a la playlist activa
+- `1` / `2` / `3` / `4`: vistas Queue / Library / Track / Search
+- `/`: activar búsqueda; `Esc` cancelarla; `Enter` buscarla
+- `Up` / `Down`: navegar; `Left` / `Right`: cambiar de columna (Library) o avanzar/retroceder
+- `Space`: reproducir/pausar; `N` / `P`: siguiente/anterior
+- `+` / `-`: volumen; `M`: silencio
+- `S`: aleatorio; `R`: repetir
+- `F`: favorito; `D`: borrar elemento; `C`: crear playlist; `A`: añadir a playlist
+- `L`: validar sesión / iniciar login por navegador
+- `Esc` en la vista normal: abre el menú flotante (`←`/`→` cambian el valor)
 - `Q`: salir
+
+## Aspecto y temas
+
+Cada tema es una paleta de tres colores (oscuro, medio, brillante) con un
+mínimo de contraste. Hay temas integrados (`gruvbox`, `nord`, `dracula`,
+`catppuccin`, `tokyonight`, `everforest`, `rosepine`, `solarized`, `matrix`,
+`mono`) y `cover` (por defecto), que deriva la paleta de la carátula.
+
+Los temas propios van en `%APPDATA%\yt-dj\themes\*.toml`. El tema y el mapa de
+teclas (`default` o `vim`) se eligen en la sección `[ui]` de
+`config/default.toml` o desde el menú (`Esc`).
+
+Las carátulas se dibujan como bloques de media altura en cualquier terminal
+truecolor y con **Sixel** o **kitty graphics** en terminales compatibles
+(WezTerm, foot, mintty, kitty, Ghostty…). La detección es automática;
+`YT_DJ_IMAGE_PROTOCOL=kitty|sixel|halfblock|none` la fuerza.
 
 ## Arquitectura
 

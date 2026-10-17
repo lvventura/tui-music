@@ -48,12 +48,5 @@ mod tests {
         super::super::playlists::rename(&connection, "p1", "Renamed").unwrap();
         super::super::playlists::move_song(&connection, "p1", "song-1", 0).unwrap();
         super::super::playlists::remove_song(&connection, "p1", "song-1").unwrap();
-        super::super::preferences::set(&connection, "volume", "42").unwrap();
-        assert_eq!(
-            super::super::preferences::get(&connection, "volume")
-                .unwrap()
-                .as_deref(),
-            Some("42")
-        );
     }
 }

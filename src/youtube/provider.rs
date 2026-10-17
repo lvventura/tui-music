@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     io::{self, Read, Seek, SeekFrom},
+    path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex},
     time::Duration,
@@ -106,8 +107,11 @@ pub struct YtDlpProvider {
     http: reqwest::Client,
     search_cache: Arc<Mutex<Cache<String, Vec<Song>>>>,
     timeout: Duration,
+    resolve_timeout: Duration,
     retries: u32,
     retry_delay: Duration,
+    cookies_file: Option<PathBuf>,
+    cookies_from_browser: Option<String>,
     pub metrics: Arc<Metrics>,
 }
 
@@ -127,10 +131,39 @@ impl YtDlpProvider {
                 Duration::from_secs(settings.cache.search_ttl_seconds),
             ))),
             timeout,
+            // Format extraction can take noticeably longer than a plain request.
+            resolve_timeout: timeout.max(Duration::from_secs(30)),
             retries: settings.network.max_retries,
             retry_delay: Duration::from_millis(settings.network.initial_retry_delay_ms),
+            cookies_file: None,
+            cookies_from_browser: None,
             metrics: Arc::new(Metrics::default()),
         }
+    }
+
+    pub fn with_cookies(mut self, cookies_file: Option<PathBuf>) -> Self {
+        self.cookies_file = cookies_file;
+        self
+    }
+
+    /// Fallback used when no cookie header is stored: let yt-dlp read the
+    /// browser's cookies itself (handles Chrome/Edge/Firefox on Windows).
+    pub fn with_browser_cookies(mut self, browser: Option<String>) -> Self {
+        self.cookies_from_browser = browser.filter(|value| !value.trim().is_empty());
+        self
+    }
+
+    fn cookie_args(&self) -> Vec<String> {
+        if let Some(path) = &self.cookies_file {
+            return vec!["--cookies".to_owned(), path.to_string_lossy().into_owned()];
+        }
+        if let Some(browser) = &self.cookies_from_browser {
+            return vec![
+                "--cookies-from-browser".to_owned(),
+                browser.trim().to_owned(),
+            ];
+        }
+        Vec::new()
     }
 
     pub async fn available(&self) -> bool {
@@ -151,13 +184,31 @@ impl YtDlpProvider {
     }
 
     async fn command(&self, args: &[&str]) -> AppResult<Vec<u8>> {
+        self.command_with_timeout(args, self.timeout, false).await
+    }
+
+    async fn command_authed(&self, args: &[&str], timeout: Duration) -> AppResult<Vec<u8>> {
+        self.command_with_timeout(args, timeout, true).await
+    }
+
+    async fn command_with_timeout(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        with_cookies: bool,
+    ) -> AppResult<Vec<u8>> {
+        let mut full: Vec<String> = Vec::with_capacity(args.len() + 4);
+        if with_cookies {
+            full.extend(self.cookie_args());
+        }
+        full.extend(args.iter().map(|arg| (*arg).to_owned()));
         for attempt in 0..=self.retries {
             self.metrics
                 .provider_requests
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let result = tokio::time::timeout(self.timeout, async {
+            let result = tokio::time::timeout(timeout, async {
                 Command::new(&self.executable)
-                    .args(args)
+                    .args(&full)
                     .stdin(Stdio::null())
                     .output()
                     .await
@@ -169,14 +220,16 @@ impl YtDlpProvider {
                     self.metrics
                         .provider_failures
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return Err(AppError::Provider(
-                        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-                    ));
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                    warn!(args = ?args, %stderr, "yt-dlp command failed");
+                    return Err(AppError::Provider(stderr));
                 }
                 Ok(Err(error)) if attempt == self.retries => {
+                    warn!(args = ?args, %error, "yt-dlp is not available");
                     return Err(AppError::Provider(format!("yt-dlp no disponible: {error}")));
                 }
                 Err(_) if attempt == self.retries => {
+                    warn!(args = ?args, "yt-dlp command timed out");
                     return Err(AppError::Provider("timeout del proveedor".into()));
                 }
                 _ => {
@@ -221,6 +274,7 @@ impl YtDlpProvider {
                     "audio HTTP status {status}; body read failed: {error}"
                 ))
             })?;
+            warn!(url = %request_url, %status, "audio HTTP request was rejected");
             return Err(AppError::Provider(format!(
                 "audio HTTP status {status} for {request_url}: {}",
                 preview_body(&body),
@@ -345,14 +399,17 @@ impl MusicProvider for YtDlpProvider {
                 "resolving audio format with yt-dlp"
             );
             let output = provider
-                .command(&["-f", AUDIO_FORMAT, "-g", "--no-playlist", &page])
+                .command_authed(
+                    &["-f", AUDIO_FORMAT, "-g", "--no-playlist", &page],
+                    provider.resolve_timeout,
+                )
                 .await?;
             let url =
                 String::from_utf8(output).map_err(|error| AppError::Provider(error.to_string()))?;
             for attempt in 0..=provider.retries {
                 match provider.open_audio_stream(url.trim()).await {
                     Ok(stream) => return Ok(stream),
-                    Err(error) if attempt == provider.retries => return Err(error.into()),
+                    Err(error) if attempt == provider.retries => return Err(error),
                     Err(_) => tokio::time::sleep(provider.retry_delay * 2u32.pow(attempt)).await,
                 }
             }
@@ -372,12 +429,15 @@ impl MusicProvider for YtDlpProvider {
                 song.id, song.id
             );
             let output = provider
-                .command(&[
-                    "--flat-playlist",
-                    "--dump-json",
-                    "--skip-download",
-                    &mix_url,
-                ])
+                .command_authed(
+                    &[
+                        "--flat-playlist",
+                        "--dump-json",
+                        "--skip-download",
+                        &mix_url,
+                    ],
+                    provider.resolve_timeout,
+                )
                 .await?;
             output
                 .split(|byte| *byte == b'\n')

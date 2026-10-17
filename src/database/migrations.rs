@@ -44,10 +44,6 @@ pub fn run(connection: &Connection) -> AppResult<()> {
             UNIQUE (playlist_id, song_id),
             FOREIGN KEY (playlist_id) REFERENCES playlists(id),
             FOREIGN KEY (song_id) REFERENCES songs(id)
-        );
-        CREATE TABLE IF NOT EXISTS preferences (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
         );",
     )?;
     connection.execute(

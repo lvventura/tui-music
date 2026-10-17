@@ -1,4 +1,7 @@
-mod layout;
+pub mod cover;
+pub mod keymap;
+pub mod layout;
+pub mod theme;
 
 use ratatui::Frame;
 

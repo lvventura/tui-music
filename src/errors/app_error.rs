@@ -12,6 +12,8 @@ pub enum AppError {
     Http(reqwest::Error),
     #[error("configuration error: {0}")]
     Config(toml::de::Error),
+    #[error("state error: {0}")]
+    State(String),
     #[error("provider error: {0}")]
     Provider(String),
     #[error("player error: {0}")]
@@ -36,5 +38,10 @@ impl From<reqwest::Error> for AppError {
 impl From<toml::de::Error> for AppError {
     fn from(error: toml::de::Error) -> Self {
         Self::Config(error)
+    }
+}
+impl From<toml::ser::Error> for AppError {
+    fn from(error: toml::ser::Error) -> Self {
+        Self::State(error.to_string())
     }
 }

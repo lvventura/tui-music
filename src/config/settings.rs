@@ -5,11 +5,14 @@ use std::{
 
 use serde::Deserialize;
 
+use super::state;
 use crate::errors::AppResult;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
+    #[serde(default = "default_volume")]
     pub volume: u8,
+    #[serde(default)]
     pub database_path: String,
     #[serde(default = "default_yt_dlp_path")]
     pub yt_dlp_path: String,
@@ -27,6 +30,25 @@ pub struct Settings {
     pub dj: DJSettings,
     #[serde(default)]
     pub ai: AISettings,
+    #[serde(default)]
+    pub ui: UiSettings,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UiSettings {
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default = "default_keymap")]
+    pub keymap: String,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            theme: default_theme(),
+            keymap: default_keymap(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,39 +250,60 @@ fn default_yt_dlp_path() -> String {
     "yt-dlp".into()
 }
 
+fn default_theme() -> String {
+    "cover".into()
+}
+
+fn default_keymap() -> String {
+    "default".into()
+}
+
+fn default_volume() -> u8 {
+    state::DEFAULT_VOLUME
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            volume: default_volume(),
+            database_path: String::new(),
+            yt_dlp_path: default_yt_dlp_path(),
+            auth: AuthSettings::default(),
+            seek_step: default_seek_step(),
+            large_seek_step: default_large_seek_step(),
+            cache: CacheSettings::default(),
+            network: NetworkSettings::default(),
+            dj: DJSettings::default(),
+            ai: AISettings::default(),
+            ui: UiSettings::default(),
+        }
+    }
+}
+
 impl Settings {
     pub fn load(path: impl AsRef<Path>) -> AppResult<Self> {
         Ok(toml::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    /// Loads the user configuration without ever reading or rewriting the
+    /// bundled defaults: a user file wins, then the repo default, then the
+    /// built-in defaults.
+    pub fn load_effective() -> AppResult<Self> {
+        let user = super::paths::config_file();
+        if user.exists() {
+            return Self::load(user);
+        }
+        let bundled = Path::new("config/default.toml");
+        if bundled.exists() {
+            return Self::load(bundled);
+        }
+        Ok(Self::default())
     }
 
     pub fn database_path(&self) -> PathBuf {
         if !self.database_path.is_empty() {
             return PathBuf::from(&self.database_path);
         }
-        if cfg!(windows) {
-            std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("yt-dj")
-                .join("yt-dj.db")
-        } else {
-            std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-                })
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("yt-dj")
-                .join("yt-dj.db")
-        }
-    }
-
-    pub fn initial_volume(&self, database: &crate::database::Database) -> u8 {
-        crate::database::repositories::preferences::get(database.connection(), "volume")
-            .ok()
-            .flatten()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(self.volume)
-            .min(100)
+        super::paths::database_file()
     }
 }

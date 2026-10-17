@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.29"
+dirs = "6"
 futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 ratatui = "0.29"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rodio = "0.21"
