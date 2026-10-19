@@ -43,7 +43,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
 }
 
 pub fn usage() -> &'static str {
-    "yt-dj [--auth cookie|clipboard|cookie-file <ruta>|browser] [--diagnose] [--help]"
+    "lite-music [--auth cookie|clipboard|cookie-file <ruta>|browser] [--diagnose] [--help]"
 }
 
 #[cfg(test)]

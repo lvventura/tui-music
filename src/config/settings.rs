@@ -40,6 +40,10 @@ pub struct UiSettings {
     pub theme: String,
     #[serde(default = "default_keymap")]
     pub keymap: String,
+    #[serde(default = "default_glyphs")]
+    pub glyphs: String,
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 impl Default for UiSettings {
@@ -47,6 +51,8 @@ impl Default for UiSettings {
         Self {
             theme: default_theme(),
             keymap: default_keymap(),
+            glyphs: default_glyphs(),
+            language: default_language(),
         }
     }
 }
@@ -256,6 +262,14 @@ fn default_theme() -> String {
 
 fn default_keymap() -> String {
     "default".into()
+}
+
+fn default_glyphs() -> String {
+    "auto".into()
+}
+
+fn default_language() -> String {
+    "es".into()
 }
 
 fn default_volume() -> u8 {

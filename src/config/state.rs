@@ -19,6 +19,7 @@ pub struct State {
     pub repeat: String,
     pub theme: String,
     pub keymap: String,
+    pub language: String,
     pub last_view: String,
 }
 
@@ -31,6 +32,7 @@ impl Default for State {
             repeat: "Off".into(),
             theme: DEFAULT_THEME.into(),
             keymap: "default".into(),
+            language: String::new(),
             last_view: DEFAULT_VIEW.into(),
         }
     }
@@ -50,16 +52,13 @@ impl State {
         Ok(())
     }
 
-    /// Volume to start with, plus a warning when the stored value would leave
-    /// the app silent without explanation.
-    pub fn starting_volume(&self) -> (u8, Option<&'static str>) {
+    /// Volume to start with, plus whether the stored value had to be lifted
+    /// back to an audible level (the caller localises the warning).
+    pub fn starting_volume(&self) -> (u8, bool) {
         if self.volume == 0 {
-            (
-                DEFAULT_VOLUME,
-                Some("El volumen guardado era 0; restaurado a un valor audible"),
-            )
+            (DEFAULT_VOLUME, true)
         } else {
-            (self.volume.min(100), None)
+            (self.volume.min(100), false)
         }
     }
 
@@ -88,7 +87,7 @@ mod tests {
         };
         let (volume, warning) = state.starting_volume();
         assert!(volume > 0, "a stored zero volume must not start silent");
-        assert!(warning.is_some(), "the silent restore must be announced");
+        assert!(warning, "the silent restore must be announced");
         assert_ne!(volume, 0);
     }
 
@@ -98,7 +97,7 @@ mod tests {
             volume: 42,
             ..State::default()
         };
-        assert_eq!(state.starting_volume(), (42, None));
+        assert_eq!(state.starting_volume(), (42, false));
     }
 
     #[test]

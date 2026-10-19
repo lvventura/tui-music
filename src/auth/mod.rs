@@ -54,16 +54,6 @@ pub enum AuthStatus {
     Authenticated,
 }
 
-impl AuthStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Unauthenticated => "Unauthenticated",
-            Self::Verifying => "Verificando…",
-            Self::Authenticated => "Authenticated",
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct AuthManager {
     status: AuthStatus,
@@ -147,12 +137,12 @@ impl AuthManager {
             let error = String::from_utf8_lossy(&output.stderr);
             if error.contains("Could not copy Chrome cookie database") {
                 return Err(AppError::Provider(
-                    "yt-dlp no puede copiar las cookies de Chrome. Cierra Chrome por completo, verifica que YT-DJ corre con el mismo usuario de Windows y pulsa L de nuevo; también puedes usar Edge/Firefox en [auth].browser".into(),
+                    "yt-dlp no puede copiar las cookies de Chrome. Cierra Chrome por completo, verifica que Lite|Music corre con el mismo usuario de Windows y pulsa L de nuevo; también puedes usar Edge/Firefox en [auth].browser".into(),
                 ));
             }
             if error.contains("Failed to decrypt with DPAPI") {
                 return Err(AppError::Provider(
-                    "Windows no permitió descifrar las cookies de Chrome. Ejecuta YT-DJ con el mismo usuario de Windows que Chrome, cierra Chrome por completo o configura otro navegador en [auth].browser".into(),
+                    "Windows no permitió descifrar las cookies de Chrome. Ejecuta Lite|Music con el mismo usuario de Windows que Chrome, cierra Chrome por completo o configura otro navegador en [auth].browser".into(),
                 ));
             }
             return Err(AppError::Provider(error.trim().to_owned()));

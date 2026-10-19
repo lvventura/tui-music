@@ -22,40 +22,41 @@ impl KeymapPreset {
 
 struct Binding {
     keys: &'static str,
-    action: &'static str,
+    action: fn(&crate::i18n::Text) -> &'static str,
 }
 
 const DEFAULT: &[Binding] = &[
-    Binding { keys: "Space", action: "Play/Pause" },
-    Binding { keys: "N/P", action: "Track" },
-    Binding { keys: "\u{2190}/\u{2192}", action: "Seek" },
-    Binding { keys: "+/-", action: "Volume" },
-    Binding { keys: "M", action: "Mute" },
-    Binding { keys: "1-4", action: "Views" },
-    Binding { keys: "/", action: "Search" },
-    Binding { keys: "S", action: "Shuffle" },
-    Binding { keys: "R", action: "Repeat" },
-    Binding { keys: "Esc", action: "Menu" },
-    Binding { keys: "D", action: "Debug" },
-    Binding { keys: "Q", action: "Quit" },
+    Binding { keys: "Space", action: |t| t.kp_play_pause },
+    Binding { keys: "N/P", action: |t| t.kp_track },
+    Binding { keys: "\u{2190}/\u{2192}", action: |t| t.kp_seek },
+    Binding { keys: "+/-", action: |t| t.kp_volume },
+    Binding { keys: "M", action: |t| t.kp_mute },
+    Binding { keys: "1-4", action: |t| t.kp_views },
+    Binding { keys: "/", action: |t| t.kp_search },
+    Binding { keys: "S", action: |t| t.kp_shuffle },
+    Binding { keys: "R", action: |t| t.kp_repeat },
+    Binding { keys: "V", action: |t| t.kp_bars },
+    Binding { keys: "Esc", action: |t| t.kp_menu },
+    Binding { keys: "D", action: |t| t.kp_debug },
+    Binding { keys: "Q", action: |t| t.kp_quit },
 ];
 
 const VIM_EXTRA: &[Binding] = &[
-    Binding { keys: "H", action: "Seek back" },
-    Binding { keys: "J/K", action: "Move" },
+    Binding { keys: "H", action: |t| t.kp_seek_back },
+    Binding { keys: "J/K", action: |t| t.kp_move },
 ];
 
-/// Builds the bottom help line from the active keymap.
-pub fn help_line(preset: KeymapPreset) -> String {
+/// Builds the bottom help line from the active keymap and language.
+pub fn help_line(preset: KeymapPreset, text: &crate::i18n::Text) -> String {
     let mut parts: Vec<String> = DEFAULT
         .iter()
-        .map(|binding| format!("[{}] {}", binding.keys, binding.action))
+        .map(|binding| format!("[{}] {}", binding.keys, (binding.action)(text)))
         .collect();
     if preset == KeymapPreset::Vim {
         parts.extend(
             VIM_EXTRA
                 .iter()
-                .map(|binding| format!("[{}] {}", binding.keys, binding.action)),
+                .map(|binding| format!("[{}] {}", binding.keys, (binding.action)(text))),
         );
     }
     parts.join("  ")
@@ -64,18 +65,26 @@ pub fn help_line(preset: KeymapPreset) -> String {
 #[cfg(test)]
 mod tests {
     use super::{KeymapPreset, help_line};
+    use crate::i18n::Text;
 
     #[test]
     fn the_help_line_mentions_core_keys() {
-        let help = help_line(KeymapPreset::Default);
+        let help = help_line(KeymapPreset::Default, &Text::en());
         for expected in ["Space", "Esc", "1-4", "Volume", "Quit"] {
             assert!(help.contains(expected), "missing {expected} in {help}");
         }
     }
 
     #[test]
+    fn the_help_line_follows_the_language() {
+        let es = help_line(KeymapPreset::Default, &Text::es());
+        assert!(es.contains("Volumen"), "missing Volumen in {es}");
+        assert!(es.contains("Salir"), "missing Salir in {es}");
+    }
+
+    #[test]
     fn the_vim_preset_adds_its_keys() {
-        let help = help_line(KeymapPreset::Vim);
+        let help = help_line(KeymapPreset::Vim, &Text::en());
         assert!(help.contains("[H] Seek back"));
         assert!(help.contains("J/K"));
     }

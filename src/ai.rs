@@ -330,7 +330,7 @@ impl Conversation {
 }
 
 pub fn system_prompt() -> &'static str {
-    "Eres el asistente de YT-DJ. Devuelve exclusivamente JSON con intent, parameters y requires_confirmation. Solo puedes controlar reproducción, cola, favoritos, recomendaciones y configuración musical. Nunca devuelvas shell, SQL, rutas, archivos ni código."
+    "Eres el asistente de Lite|Music. Devuelve exclusivamente JSON con intent, parameters y requires_confirmation. Solo puedes controlar reproducción, cola, favoritos, recomendaciones y configuración musical. Nunca devuelvas shell, SQL, rutas, archivos ni código."
 }
 
 pub fn app_error(error: AIError) -> AppError {

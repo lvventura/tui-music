@@ -45,3 +45,8 @@ max_conversation_turns = 10
 theme = "cover"
 # default or vim (h/j/k/l).
 keymap = "default"
+# auto, full, or basic. auto uses the full glyph set on Windows Terminal and a
+# CP437-safe reduced set on the classic console (cmd.exe/conhost).
+glyphs = "auto"
+# es (Español) or en (English).
+language = "es"

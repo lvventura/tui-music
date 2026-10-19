@@ -1,6 +1,10 @@
-# yt-dj
+# Lite|Music
 
 Cliente TUI de YouTube Music escrito en Rust para Windows y Linux.
+
+> El nombre visible de la aplicación es **Lite|Music**. La carpeta de datos y
+> los identificadores internos siguen usando `yt-dj` (`%APPDATA%\yt-dj`), para
+> no perder la configuración, el historial ni las cookies existentes.
 
 ## Requisitos
 
@@ -19,17 +23,19 @@ cargo build --release
 cargo run
 ```
 
+El ejecutable resultante es `target\release\lite-music.exe`.
+
 ## Autenticación (opcional)
 
 Búsqueda, radio y reproducción funcionan sin credenciales. La biblioteca
 personal (Liked Music) requiere una sesión:
 
 ```text
-yt-dj --auth cookie            # pega la cabecera Cookie de DevTools y la valida
-yt-dj --auth clipboard         # lee esa cabecera del portapapeles (Windows)
-yt-dj --auth cookie-file FILE  # valida un cookies.txt (Netscape) exportado
-yt-dj --auth browser           # lee cookies de Firefox/Waterfox/LibreWolf/Floorp
-yt-dj --diagnose               # entorno, credenciales y biblioteca
+lite-music --auth cookie            # pega la cabecera Cookie de DevTools y la valida
+lite-music --auth clipboard         # lee esa cabecera del portapapeles (Windows)
+lite-music --auth cookie-file FILE  # valida un cookies.txt (Netscape) exportado
+lite-music --auth browser           # lee cookies de Firefox/Waterfox/LibreWolf/Floorp
+lite-music --diagnose               # entorno, credenciales y biblioteca
 ```
 
 La cookie se valida con `yt-dlp` antes de guardarse en
@@ -52,11 +58,21 @@ navegador como respaldo.
 - `Up` / `Down`: navegar; `Left` / `Right`: cambiar de columna (Library) o avanzar/retroceder
 - `Space`: reproducir/pausar; `N` / `P`: siguiente/anterior
 - `+` / `-`: volumen; `M`: silencio
-- `S`: aleatorio; `R`: repetir
+- `S`: aleatorio; `R`: repetir; `V`: barras del visualizador (vista Track)
 - `F`: favorito; `D`: borrar elemento; `C`: crear playlist; `A`: añadir a playlist
 - `L`: validar sesión / iniciar login por navegador
 - `Esc` en la vista normal: abre el menú flotante (`←`/`→` cambian el valor)
 - `Q`: salir
+
+## Idioma
+
+La interfaz está en español por defecto y puede cambiarse a inglés:
+
+- Ajuste inicial en `[ui] language` de `config/default.toml` (`"es"` o `"en"`).
+- Cambio en vivo desde el menú (`Esc` → **Idioma**); la elección se guarda en el
+  estado y tiene prioridad sobre el valor inicial del archivo.
+
+Los textos del CLI (`--auth`, `--diagnose`, `--help`) siguen el mismo ajuste.
 
 ## Aspecto y temas
 

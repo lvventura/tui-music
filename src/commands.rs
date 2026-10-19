@@ -5,10 +5,12 @@ use crate::auth;
 use crate::cli::AuthMode;
 use crate::config::{Settings, paths};
 use crate::errors::{AppError, AppResult};
+use crate::i18n::{self, Language, Text};
 
 pub async fn run_auth(mode: AuthMode, settings: &Settings) -> AppResult<()> {
+    let text = Text::new(Language::parse(&settings.ui.language));
     let header = match mode {
-        AuthMode::Cookie => prompt_cookie()?,
+        AuthMode::Cookie => prompt_cookie(&text)?,
         AuthMode::Clipboard => clipboard_cookie()?,
         AuthMode::File(path) => file_cookie(&path)?,
         AuthMode::Browser => browser_cookie()?,
@@ -16,14 +18,17 @@ pub async fn run_auth(mode: AuthMode, settings: &Settings) -> AppResult<()> {
     auth::validate_with_ytdlp(&settings.yt_dlp_path, &header).await?;
     auth::store_cookie(&header)?;
     println!(
-        "Sesión validada. Cookie guardada en {}",
-        paths::cookie_file().display()
+        "{}",
+        i18n::fill(
+            text.cli_store_ok_fmt,
+            &[paths::cookie_file().display().to_string()]
+        )
     );
     Ok(())
 }
 
-fn prompt_cookie() -> AppResult<auth::CookieHeader> {
-    println!("Pega la cabecera Cookie de una petición a music.youtube.com (DevTools > Network):");
+fn prompt_cookie(text: &Text) -> AppResult<auth::CookieHeader> {
+    println!("{}", text.cli_paste_prompt);
     print!("> ");
     std::io::stdout().flush()?;
     let mut input = String::new();
@@ -77,14 +82,18 @@ fn browser_cookie() -> AppResult<auth::CookieHeader> {
 }
 
 pub async fn run_diagnose(settings: &Settings) -> AppResult<()> {
-    println!("yt-dj {}", env!("CARGO_PKG_VERSION"));
-    println!("yt-dlp: {}", describe_yt_dlp(&settings.yt_dlp_path).await);
+    let text = Text::new(Language::parse(&settings.ui.language));
+    println!("{} {}", text.app_name, env!("CARGO_PKG_VERSION"));
+    println!(
+        "yt-dlp: {}",
+        describe_yt_dlp(&settings.yt_dlp_path, &text).await
+    );
     let caps = crate::terminal::TerminalCaps::detect();
     println!(
         "terminal: truecolor={} windows_terminal={}",
         caps.truecolor, caps.windows_terminal
     );
-    println!("credenciales y rutas:");
+    println!("{}", text.cli_creds_heading);
     for (label, path) in [
         ("config", paths::config_file()),
         ("state", paths::state_file()),
@@ -92,36 +101,57 @@ pub async fn run_diagnose(settings: &Settings) -> AppResult<()> {
         ("database", settings.database_path()),
         ("log", paths::log_file()),
     ] {
-        let state = if path.exists() { "presente" } else { "ausente " };
+        let state = if path.exists() {
+            text.cli_present
+        } else {
+            text.cli_absent
+        };
         println!("  {label:9} {state} {}", path.display());
     }
     match auth::load_stored_cookie().and_then(|raw| auth::CookieHeader::parse(&raw).ok()) {
         Some(header) => match auth::validate_with_ytdlp(&settings.yt_dlp_path, &header).await {
-            Ok(()) => println!("biblioteca (Liked Music): accesible"),
-            Err(error) => println!("biblioteca (Liked Music): {error}"),
+            Ok(()) => println!("{}: {}", text.cli_library_label, text.cli_library_ok),
+            Err(error) => println!("{}: {error}", text.cli_library_label),
         },
-        None => println!("biblioteca (Liked Music): sin cookie guardada"),
+        None => println!("{}: {}", text.cli_library_label, text.cli_library_empty),
     }
     match count_search(&settings.yt_dlp_path).await {
-        Ok(count) => println!("búsqueda (ytsearch): {count} resultados"),
-        Err(error) => println!("búsqueda (ytsearch): {error}"),
+        Ok(count) => println!(
+            "{}: {}",
+            text.cli_search_label,
+            i18n::fill(text.cli_search_ok_fmt, &[count.to_string()])
+        ),
+        Err(error) => println!("{}: {error}", text.cli_search_label),
     }
     Ok(())
 }
 
-pub fn print_help() {
+pub fn print_help(language: Language) {
     println!("{}", crate::cli::usage());
     println!();
-    println!("  (sin argumentos)   abre la TUI");
-    println!("  --auth cookie      valida y guarda una cabecera Cookie pegada");
-    println!("  --auth clipboard   lee la cabecera Cookie del portapapeles (Windows)");
-    println!("  --auth cookie-file valida y guarda un cookies.txt (Netscape) exportado");
-    println!("  --auth browser     lee cookies de Firefox/Waterfox/LibreWolf/Floorp");
-    println!("  --diagnose         informa entorno, credenciales y biblioteca");
-    println!("  --help             muestra esta ayuda");
+    match language {
+        Language::Es => {
+            println!("  (sin argumentos)   abre la TUI");
+            println!("  --auth cookie      valida y guarda una cabecera Cookie pegada");
+            println!("  --auth clipboard   lee la cabecera Cookie del portapapeles (Windows)");
+            println!("  --auth cookie-file valida y guarda un cookies.txt (Netscape) exportado");
+            println!("  --auth browser     lee cookies de Firefox/Waterfox/LibreWolf/Floorp");
+            println!("  --diagnose         informa entorno, credenciales y biblioteca");
+            println!("  --help             muestra esta ayuda");
+        }
+        Language::En => {
+            println!("  (no arguments)     opens the TUI");
+            println!("  --auth cookie      validates and stores a pasted Cookie header");
+            println!("  --auth clipboard   reads the Cookie header from the clipboard (Windows)");
+            println!("  --auth cookie-file validates and stores an exported cookies.txt (Netscape)");
+            println!("  --auth browser     reads cookies from Firefox/Waterfox/LibreWolf/Floorp");
+            println!("  --diagnose         reports environment, credentials and library");
+            println!("  --help             shows this help");
+        }
+    }
 }
 
-async fn describe_yt_dlp(executable: &str) -> String {
+async fn describe_yt_dlp(executable: &str, text: &Text) -> String {
     match tokio::process::Command::new(executable)
         .arg("--version")
         .stdin(Stdio::null())
@@ -134,7 +164,7 @@ async fn describe_yt_dlp(executable: &str) -> String {
                 String::from_utf8_lossy(&output.stdout).trim()
             )
         }
-        _ => format!("no disponible ({executable})"),
+        _ => format!("{} ({executable})", text.cli_ytdlp_unavailable),
     }
 }
 

@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::{
     app::{Action, Event},
     config::paths,
+    i18n::{Language, Text},
     player::{
         audio::PlayerSnapshot,
         state::{PlaybackStatus, PlayerState},
@@ -10,6 +11,7 @@ use crate::{
     terminal::ImageProtocol,
     ui::{
         cover::CoverImage,
+        glyphs::GlyphSet,
         keymap::KeymapPreset,
         theme::Theme,
     },
@@ -36,12 +38,12 @@ pub enum View {
 impl View {
     pub const ALL: [View; 4] = [View::Queue, View::Library, View::NowPlaying, View::Search];
 
-    pub fn title(self) -> &'static str {
+    pub fn title(self, text: &Text) -> &'static str {
         match self {
-            View::Queue => "Queue",
-            View::Library => "Library",
-            View::NowPlaying => "Track",
-            View::Search => "Search",
+            View::Queue => text.view_queue,
+            View::Library => text.view_library,
+            View::NowPlaying => text.view_track,
+            View::Search => text.view_search,
         }
     }
 
@@ -105,6 +107,9 @@ pub struct App {
     pub theme_seed: String,
     pub available_themes: Vec<String>,
     pub keymap: KeymapPreset,
+    pub glyphs: GlyphSet,
+    pub language: Language,
+    pub text: Text,
     pub show_menu: bool,
     pub menu_option: usize,
     pub library_focus: usize,
@@ -150,7 +155,7 @@ impl App {
             view: View::Search,
             search_mode: false,
             searching: false,
-            status: "Pulsa / para buscar".into(),
+            status: Text::es().search_prompt.into(),
             has_audio: false,
             should_quit: false,
             favorites: Vec::new(),
@@ -161,7 +166,7 @@ impl App {
             playlist_songs: Vec::new(),
             player: PlayerState::new(volume, 5, 15),
             debug_visible: false,
-            account_status: "Unauthenticated".into(),
+            account_status: Text::es().account_signed_out.into(),
             terminal_note: None,
             truecolor: true,
             image_protocol: ImageProtocol::HalfBlock,
@@ -172,6 +177,9 @@ impl App {
             theme_seed: "yt-dj".into(),
             available_themes,
             keymap: KeymapPreset::Default,
+            glyphs: crate::ui::glyphs::full(),
+            language: Language::Es,
+            text: Text::es(),
             show_menu: false,
             menu_option: 0,
             library_focus: 0,
@@ -194,6 +202,12 @@ impl App {
         self.apply_theme();
     }
 
+    /// Switches the UI language, refreshing the catalogue used everywhere.
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+        self.text = Text::new(language);
+    }
+
     /// Called when the current song (and thus the cover seed) changes.
     pub fn set_cover_seed(&mut self, seed: String) {
         self.theme_seed = seed;
@@ -214,7 +228,7 @@ impl App {
                     Ok(songs) => {
                         self.selected_result = 0;
                         self.search_results = songs;
-                        self.status = format!("{} resultados", self.search_results.len());
+                        self.status = self.text.results(self.search_results.len());
                     }
                     Err(error) => self.status = error,
                 }
@@ -224,7 +238,7 @@ impl App {
                 match result {
                     Ok(_) => {
                         self.has_audio = true;
-                        self.status = "Audio listo".into();
+                        self.status = self.text.audio_ready.into();
                     }
                     Err(error) => self.status = error,
                 }
@@ -233,18 +247,18 @@ impl App {
             Event::RelatedFinished(result) => {
                 if let Ok(songs) = result {
                     self.queue.extend(songs);
-                    self.status = "Mix listo".into();
+                    self.status = self.text.mix_ready.into();
                 }
                 None
             }
             Event::AuthFinished(result) => {
                 match result {
                     Ok(()) => {
-                        self.account_status = "Authenticated".into();
-                        self.status = "Sesión autenticada".into();
+                        self.account_status = self.text.account_signed_in.into();
+                        self.status = self.text.session_authenticated.into();
                     }
                     Err(error) => {
-                        self.account_status = "Unauthenticated".into();
+                        self.account_status = self.text.account_signed_out.into();
                         self.status = error;
                     }
                 }
@@ -294,6 +308,10 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => Some(Action::Login),
             KeyCode::Char('D') => {
                 self.debug_visible = !self.debug_visible;
+                None
+            }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                crate::ui::track::visualizer::toggle();
                 None
             }
             KeyCode::Char('r') => Some(Action::CycleRepeat),
@@ -398,6 +416,10 @@ impl App {
                     KeymapPreset::Default => KeymapPreset::Vim,
                     KeymapPreset::Vim => KeymapPreset::Default,
                 };
+                None
+            }
+            MENU_LANGUAGE => {
+                self.set_language(self.language.next());
                 None
             }
             MENU_QUIT => {
@@ -644,7 +666,7 @@ impl App {
 
     pub fn set_searching(&mut self) {
         self.searching = true;
-        self.status = "Searching...".into();
+        self.status = self.text.searching.into();
     }
 
     pub fn play_next(&mut self) -> Option<Song> {
@@ -691,11 +713,12 @@ pub const MENU_VOLUME: usize = 1;
 pub const MENU_SHUFFLE: usize = 2;
 pub const MENU_REPEAT: usize = 3;
 pub const MENU_KEYMAP: usize = 4;
-pub const MENU_QUIT: usize = 5;
-pub const MENU_LEN: usize = 6;
+pub const MENU_LANGUAGE: usize = 5;
+pub const MENU_QUIT: usize = 6;
+pub const MENU_LEN: usize = 7;
 
-pub fn menu_labels() -> [&'static str; MENU_LEN] {
-    ["Theme", "Volume", "Shuffle", "Repeat", "Keymap", "Quit"]
+pub fn menu_labels(text: &Text) -> [&'static str; MENU_LEN] {
+    text.menu_labels
 }
 
 #[cfg(test)]

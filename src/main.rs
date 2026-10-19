@@ -8,6 +8,7 @@ mod config;
 mod database;
 mod dj;
 mod errors;
+mod i18n;
 mod metrics;
 mod player;
 mod terminal;
@@ -54,7 +55,7 @@ async fn main() -> AppResult<()> {
         .append(true)
         .open(paths::log_file())?;
     tracing_subscriber::fmt()
-        .with_env_filter("info,yt_dj=debug")
+        .with_env_filter("info,lite_music=debug")
         .with_ansi(false)
         .with_writer(log_file)
         .init();
@@ -62,7 +63,7 @@ async fn main() -> AppResult<()> {
 
     match command {
         Command::Help => {
-            commands::print_help();
+            commands::print_help(i18n::Language::parse(&settings.ui.language));
             return Ok(());
         }
         Command::Auth(mode) => return finish_cli(commands::run_auth(mode, &settings).await),
@@ -80,11 +81,11 @@ async fn main() -> AppResult<()> {
         .with_browser_cookies(Some(settings.auth.browser.clone()));
     let provider_available = concrete_provider.available().await;
     let provider: Arc<dyn MusicProvider> = Arc::new(concrete_provider);
-    info!("yt-dj started");
+    info!("lite-music started");
     let (events, mut incoming) = mpsc::unbounded_channel();
 
     let mut state = State::load(&paths::state_file());
-    let (starting_volume, volume_warning) = state.starting_volume();
+    let (starting_volume, volume_restored) = state.starting_volume();
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -92,11 +93,17 @@ async fn main() -> AppResult<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new(starting_volume);
+    let language_code = if state.language.is_empty() {
+        settings.ui.language.clone()
+    } else {
+        state.language.clone()
+    };
+    app.set_language(i18n::Language::parse(&language_code));
     let mut auth = auth::AuthManager::with_cookie(settings.auth.browser.clone(), stored_cookie);
-    app.account_status = auth.status().label().into();
+    app.account_status = account_label(auth.status(), &app.text).into();
     if let (Some(header), true) = (auth.cookie_header().cloned(), provider_available) {
         auth.set_status(auth::AuthStatus::Verifying);
-        app.account_status = auth::AuthStatus::Verifying.label().into();
+        app.account_status = account_label(auth::AuthStatus::Verifying, &app.text).into();
         let yt_dlp = settings.yt_dlp_path.clone();
         let sender = events.clone();
         tokio::spawn(async move {
@@ -104,13 +111,22 @@ async fn main() -> AppResult<()> {
             let _ = sender.send(Event::AuthFinished(result.map_err(|error| error.to_string())));
         });
     }
-    if let Some(warning) = volume_warning {
-        app.status = warning.into();
+    if volume_restored {
+        app.status = app.text.volume_restored.into();
     }
     let caps = terminal::TerminalCaps::detect();
     app.truecolor = caps.truecolor;
     app.image_protocol = caps.image;
-    app.terminal_note = caps.note();
+    app.terminal_note = if caps.truecolor {
+        None
+    } else {
+        Some(app.text.term_note.to_string())
+    };
+    app.glyphs = ui::glyphs::GlyphSet::resolve(
+        &settings.ui.glyphs,
+        caps.windows_terminal,
+        caps.truecolor,
+    );
     let theme_name = if state.theme.is_empty() {
         settings.ui.theme.clone()
     } else {
@@ -122,10 +138,7 @@ async fn main() -> AppResult<()> {
         app.navigate(view);
     }
     if !provider_available {
-        app.status = format!(
-            "yt-dlp no encontrado o no ejecutable: {}",
-            settings.yt_dlp_path
-        );
+        app.status = app.text.ytdlp_missing(&settings.yt_dlp_path);
     }
 
     app.player.seek_step = settings.seek_step;
@@ -154,6 +167,7 @@ async fn main() -> AppResult<()> {
     state.shuffle = app.player.shuffle;
     state.theme = app.theme_name.clone();
     state.keymap = app.keymap.label().to_string();
+    state.language = app.language.code().to_string();
     state.last_view = app.view.name().to_string();
     state.set_repeat_mode(app.player.repeat);
     if let Err(error) = state.save(&paths::state_file()) {
@@ -199,7 +213,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                         request_audio(provider.clone(), song, events.clone());
                     } else {
                         app.has_audio = false;
-                        app.status = "Cargando siguiente canción…".into();
+                        app.status = app.text.loading_next.into();
                         if let Some(song) = app.current_song.clone() {
                             app.related_autoplay = true;
                             request_related(provider.clone(), song, events.clone());
@@ -217,7 +231,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                         Ok(audio) => {
                             if let Some(audio_player) = player.as_mut() {
                                 if let Err(error) = audio_player.play(audio).await {
-                                    app.status = format!("Error de reproducción: {error}");
+                                    app.status = app.text.playback_error(&error.to_string());
                                     app.has_audio = false;
                                     app.player.status = player::state::PlaybackStatus::Error;
                                 } else {
@@ -245,11 +259,11 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                                 || error.contains("429")
                                 || error.contains("cookies")
                             {
-                                " · YouTube pide sesión: copia la cookie (DevTools > Network) y ejecuta `yt-dj --auth clipboard`"
+                                app.text.session_hint
                             } else {
                                 ""
                             };
-                            app.status = format!("No se pudo obtener el audio: {error}{hint}");
+                            app.status = app.text.audio_error(&error, hint);
                             app.has_audio = false;
                             app.is_playing = false;
                             app.player.status = player::state::PlaybackStatus::Error;
@@ -275,14 +289,13 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                                         request_audio(provider.clone(), song, events.clone());
                                     }
                                     None => {
-                                        app.status = "No se encontraron recomendaciones".into()
+                                        app.status = app.text.no_recommendations.into()
                                     }
                                 }
                             } else if added > 0 {
-                                app.status =
-                                    format!("DJ: {added} recomendaciones añadidas a la cola");
+                                app.status = app.text.dj_added(added);
                             } else {
-                                app.status = "DJ: sin nuevas recomendaciones".into();
+                                app.status = app.text.dj_none.into();
                             }
                         }
                         Err(error) => app.status = error,
@@ -493,16 +506,17 @@ async fn handle_action(
         }
         Action::Login => match auth.status() {
             auth::AuthStatus::Authenticated => {
-                app.status = "Sesión ya autenticada".into();
+                app.status = app.text.already_authenticated.into();
             }
             auth::AuthStatus::Verifying => {
-                app.status = "Validación en curso…".into();
+                app.status = app.text.validating.into();
             }
             auth::AuthStatus::Unauthenticated => {
                 if let Some(header) = auth.cookie_header().cloned() {
                     auth.set_status(auth::AuthStatus::Verifying);
-                    app.account_status = auth::AuthStatus::Verifying.label().into();
-                    app.status = "Validando cookie guardada…".into();
+                    app.account_status =
+                        account_label(auth::AuthStatus::Verifying, &app.text).into();
+                    app.status = app.text.validating_cookie.into();
                     let yt_dlp = yt_dlp_path.to_owned();
                     let sender = events.clone();
                     tokio::spawn(async move {
@@ -513,23 +527,21 @@ async fn handle_action(
                 } else if auth.login_pending() {
                     match auth.verify(yt_dlp_path).await {
                         Ok(()) => {
-                            app.account_status = auth.status().label().into();
-                            app.status = "Sesión autenticada (navegador)".into();
+                            app.account_status = account_label(auth.status(), &app.text).into();
+                            app.status = app.text.authenticated_browser.into();
                         }
                         Err(error) => {
-                            app.account_status = auth.status().label().into();
+                            app.account_status = account_label(auth.status(), &app.text).into();
                             app.status = error.to_string();
                         }
                     }
                 } else {
                     match auth.begin_login() {
                         Ok(()) => {
-                            app.status = "Navegador abierto; vuelve a pulsar L para verificar. Alternativa: `yt-dj --auth cookie|browser`".into()
+                            app.status = app.text.browser_opened.into()
                         }
                         Err(error) => {
-                            app.status = format!(
-                                "{error}. Usa `yt-dj --auth cookie` o `--auth browser`"
-                            )
+                            app.status = app.text.auth_failed(&error.to_string())
                         }
                     }
                 }
@@ -549,7 +561,7 @@ async fn handle_action(
                 }
                 request_audio(provider, song, events);
             } else {
-                app.status = "Cargando siguiente canción…".into();
+                app.status = app.text.loading_next.into();
                 if let Some(song) = app.current_song.clone() {
                     request_related(provider, song, events);
                 }
@@ -562,7 +574,7 @@ async fn handle_action(
                 }
                 request_audio(provider, song, events);
             } else {
-                app.status = "No hay canción anterior en la cola".into();
+                app.status = app.text.no_previous.into();
             }
         }
         Action::ToggleFavorite => {
@@ -780,7 +792,7 @@ fn maybe_request_dj(
     };
     info!(song = %song.title, "DJ: pidiendo recomendaciones");
     app.related_autoplay = false;
-    app.status = "DJ: buscando recomendaciones…".into();
+    app.status = app.text.dj_searching.into();
     request_related(provider, song, events);
 }
 
@@ -796,6 +808,14 @@ fn request_related(
             .map_err(|error| error.to_string());
         let _ = events.send(Event::RelatedFinished(result));
     });
+}
+
+fn account_label(status: auth::AuthStatus, text: &i18n::Text) -> &'static str {
+    match status {
+        auth::AuthStatus::Authenticated => text.account_signed_in,
+        auth::AuthStatus::Verifying => text.validating,
+        auth::AuthStatus::Unauthenticated => text.account_signed_out,
+    }
 }
 
 fn finish_cli(result: AppResult<()>) -> AppResult<()> {

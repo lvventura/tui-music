@@ -11,8 +11,12 @@ use crate::app::{
     Action, App,
     state::{MENU_LEN, View, menu_labels},
 };
-use crate::player::state::{PlaybackStatus, RepeatMode};
-use crate::ui::{keymap, theme::Theme};
+use crate::player::state::RepeatMode;
+use crate::ui::{
+    keymap,
+    theme::Theme,
+    track::{self, TrackData},
+};
 
 /// Single source of truth for every panel rectangle, shared by rendering and
 /// the mouse hit-testing / cover painting.
@@ -75,13 +79,54 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_tabs(frame, geo.tabs, app);
     match app.view {
         View::Library => draw_library(frame, &geo, app),
-        View::NowPlaying => draw_now_playing(frame, &geo, app),
+        View::NowPlaying => {
+            let data = track_data(app);
+            track::draw(frame, track_area(&geo), &data, &app.theme, app.glyphs);
+        }
         View::Queue | View::Search => draw_list(frame, geo.body, app),
     }
-    draw_player(frame, geo.player, app);
+    if app.view != View::NowPlaying {
+        draw_player(frame, geo.player, app);
+    }
     draw_help(frame, geo.help, app);
     if app.show_menu {
         draw_menu(frame, frame.area(), app);
+    }
+}
+
+/// The Track view owns the body plus the player band, so the two panels fill
+/// the space left by the hidden bottom player bar.
+fn track_area(geo: &Geometry) -> Rect {
+    Rect {
+        x: geo.body.x,
+        y: geo.body.y,
+        width: geo.body.width,
+        height: geo.body.height + geo.player.height,
+    }
+}
+
+fn track_data(app: &App) -> TrackData<'_> {
+    let (title, artist) = app
+        .current_song
+        .as_ref()
+        .map(|song| (song.title.as_str(), song.artist.as_str()))
+        .unwrap_or(("", ""));
+    let album = if app.current_song.is_some() {
+        track::now_playing::album_from_title(title)
+    } else {
+        None
+    };
+    TrackData {
+        title,
+        artist,
+        album,
+        position: app.current_position,
+        duration: app.duration,
+        playing: app.player.status == crate::player::state::PlaybackStatus::Playing,
+        has_track: app.current_song.is_some(),
+        queue: &app.queue,
+        queue_index: app.queue_index,
+        text: app.text,
     }
 }
 
@@ -117,7 +162,7 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect, app: &App) {
             } else {
                 Style::default().fg(theme.mid)
             };
-            Span::styled(format!(" {} {} ", index + 1, view.title()), style)
+            Span::styled(format!(" {} {} ", index + 1, view.title(&app.text)), style)
         })
         .collect();
     frame.render_widget(Paragraph::new(Line::from(tabs)), columns[0]);
@@ -128,11 +173,15 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect, app: &App) {
         app.queue.len()
     );
     let repeat = match app.player.repeat {
-        RepeatMode::Off => "\u{21bb}off",
-        RepeatMode::Queue => "\u{21bb}all",
-        RepeatMode::Song => "\u{21bb}one",
+        RepeatMode::Off => app.glyphs.repeat_off,
+        RepeatMode::Queue => app.glyphs.repeat_all,
+        RepeatMode::Song => app.glyphs.repeat_one,
     };
-    let shuffle = if app.player.shuffle { "shuffle" } else { "-" };
+    let shuffle = if app.player.shuffle {
+        app.glyphs.shuffle_on
+    } else {
+        app.glyphs.shuffle_off
+    };
     let mut status = vec![
         Span::styled(format!("{} ", app.account_status), Style::default().fg(theme.mid)),
         Span::styled(format!("q {queue} "), Style::default().fg(theme.mid)),
@@ -149,14 +198,18 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn volume_meter<'a>(app: &App, theme: &Theme) -> Span<'a> {
     if app.player.muted || app.volume == 0 {
         return Span::styled(
-            "MUTED",
+            app.text.muted,
             Style::default()
                 .fg(theme.bright)
                 .add_modifier(Modifier::BOLD),
         );
     }
     let filled = ((app.volume as u32 * 5) / 100).min(5) as usize;
-    let meter = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(5 - filled));
+    let meter = format!(
+        "{}{}",
+        app.glyphs.volume_full.repeat(filled),
+        app.glyphs.volume_empty.repeat(5 - filled)
+    );
     Span::styled(meter, Style::default().fg(theme.bright))
 }
 
@@ -183,7 +236,7 @@ fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         View::Search => draw_search(frame, area, app),
         _ => {
             let theme = &app.theme;
-            let block = panel("Queue", theme);
+            let block = panel(app.text.panel_queue, theme);
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -203,7 +256,7 @@ fn draw_search(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let block = Block::default()
         .title(Span::styled(
-            "Search",
+            app.text.panel_search,
             Style::default().fg(theme.bright).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
@@ -215,9 +268,9 @@ fn draw_search(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 
     let prompt = if app.searching {
-        Span::styled("Buscando\u{2026}", Style::default().fg(theme.bright))
+        Span::styled(app.text.searching, Style::default().fg(theme.bright))
     } else if app.search_query.is_empty() && !app.search_mode {
-        Span::styled("Pulsa / para buscar", Style::default().fg(theme.mid))
+        Span::styled(app.text.search_prompt, Style::default().fg(theme.mid))
     } else {
         let cursor = if app.search_mode { "\u{2588}" } else { "" };
         Span::styled(
@@ -248,7 +301,7 @@ fn draw_search(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn draw_library(frame: &mut Frame<'_>, geo: &Geometry, app: &App) {
     let theme = &app.theme;
-    let titles = ["Library", "Items", "Songs"];
+    let titles = app.text.library_columns;
     for (column, rect) in geo.library.iter().enumerate() {
         let block = panel(titles[column], theme);
         let inner = block.inner(*rect);
@@ -268,9 +321,9 @@ fn draw_library(frame: &mut Frame<'_>, geo: &Geometry, app: &App) {
             0 => (0..3)
                 .map(|index| {
                     let name = match app.library_category(index) {
-                        crate::app::state::Screen::History => "History",
-                        crate::app::state::Screen::Favorites => "Favorites",
-                        _ => "Playlists",
+                        crate::app::state::Screen::History => app.text.screen_history,
+                        crate::app::state::Screen::Favorites => app.text.screen_favorites,
+                        _ => app.text.screen_playlists,
                     };
                     ListItem::new(format!("  {name}")).style(highlight(index))
                 })
@@ -313,65 +366,9 @@ fn song_items_styled<'a>(
         .collect()
 }
 
-fn draw_now_playing(frame: &mut Frame<'_>, geo: &Geometry, app: &App) {
-    let theme = &app.theme;
-    let block = panel("Now Playing", theme);
-    let inner = block.inner(geo.body);
-    frame.render_widget(block, geo.body);
-
-    let (title, artist) = app
-        .current_song
-        .as_ref()
-        .map(|song| (song.title.clone(), song.artist.clone()))
-        .unwrap_or_else(|| ("Sin canción".into(), String::new()));
-    let status = status_label(app.player.status);
-    let text_width = if app.truecolor && app.cover.is_some() {
-        geo.cover.width.saturating_sub(2)
-    } else {
-        0
-    };
-    let content_width = inner.width.saturating_sub(text_width);
-    let lines = vec![
-        Line::from(Span::styled(
-            title,
-            Style::default().fg(theme.bright).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(artist, Style::default().fg(theme.mid))),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("{status}  {}", format_time(app.current_position)),
-            Style::default().fg(theme.mid),
-        )),
-        Line::from(Span::styled(
-            progress_bar(app.current_position, app.duration),
-            Style::default().fg(theme.bright),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::default()),
-        Rect {
-            width: content_width,
-            ..inner
-        },
-    );
-
-    let show_cover = app.image_protocol == crate::terminal::ImageProtocol::HalfBlock
-        && geo.cover.width > 0
-        && geo.cover.height > 0;
-    if let (true, Some(cover)) = (show_cover, &app.cover) {
-        let cover_inner = Rect {
-            x: geo.cover.x + 1,
-            y: geo.cover.y + 1,
-            width: geo.cover.width.saturating_sub(2),
-            height: geo.cover.height.saturating_sub(2),
-        };
-        crate::ui::cover::draw(frame, cover_inner, cover);
-    }
-}
-
 fn draw_player(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let theme = &app.theme;
-    let block = panel("Player", theme);
+    let block = panel(app.text.panel_player, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -379,8 +376,8 @@ fn draw_player(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .current_song
         .as_ref()
         .map(|song| (song.title.clone(), song.artist.clone()))
-        .unwrap_or_else(|| ("Sin canción seleccionada".into(), String::new()));
-    let status = status_label(app.player.status);
+        .unwrap_or_else(|| (app.text.no_track_selected.to_string(), String::new()));
+    let status = app.glyphs.status(app.player.status);
     let line1 = Line::from(vec![
         Span::styled(format!("{status} "), Style::default().fg(theme.bright)),
         Span::styled(title, Style::default().fg(theme.bright).add_modifier(Modifier::BOLD)),
@@ -405,7 +402,7 @@ fn draw_player(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn draw_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let theme = &app.theme;
-    let mut text = keymap::help_line(app.keymap);
+    let mut text = keymap::help_line(app.keymap, &app.text);
     if let Some(note) = &app.terminal_note {
         text.push_str("  \u{2022} ");
         text.push_str(note);
@@ -424,7 +421,7 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(Span::styled(
-            " Men\u{00fa} ",
+            app.text.menu_title,
             Style::default().fg(theme.bright).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
@@ -442,19 +439,25 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &App) {
             ))
         })
         .collect();
+    lines.push(Line::from(Span::styled(
+        format!("  {}", app.text.app_name),
+        Style::default().fg(theme.mid).add_modifier(Modifier::BOLD),
+    )));
     lines.push(Line::from(""));
 
-    let labels = menu_labels();
+    let labels = menu_labels(&app.text);
     let values = [
         app.theme_name.clone(),
         format!("{}%", app.volume),
-        if app.player.shuffle { "ON".into() } else { "OFF".into() },
+        if app.player.shuffle { app.text.value_on } else { app.text.value_off }.to_string(),
         match app.player.repeat {
-            RepeatMode::Off => "OFF".to_string(),
-            RepeatMode::Queue => "QUEUE".to_string(),
-            RepeatMode::Song => "SONG".to_string(),
-        },
+            RepeatMode::Off => app.text.repeat_off_value,
+            RepeatMode::Queue => app.text.repeat_all_value,
+            RepeatMode::Song => app.text.repeat_one_value,
+        }
+        .to_string(),
         app.keymap.label().to_string(),
+        app.language.label().to_string(),
         String::new(),
     ];
     for index in 0..MENU_LEN {
@@ -473,19 +476,19 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Esc cerrar   \u{2190}/\u{2192} cambiar   \u{2191}/\u{2193} mover",
+        app.text.menu_help,
         Style::default().fg(theme.mid),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
 const BANNER: [&str; 6] = [
-    "██╗   ██╗████████╗     ██████╗     ██╗",
-    "╚██╗ ██╔╝╚══██╔══╝     ██╔══██╗    ██║",
-    " ╚████╔╝    ██║  █████╗██║  ██║    ██║",
-    "  ╚██╔╝     ██║  ╚════╝██║  ██║██╗ ██║",
-    "   ██║      ██║        ██████╔╝╚████═╝",
-    "   ╚═╝      ╚═╝        ╚═════╝  ╚═══╝ ",
+    "██╗      ██╗   ████████╗ ███████╗ ",
+    "██║      ██║   ╚══██╔══╝ ██╔════╝ ",
+    "██║      ██║      ██║    █████╗   ",
+    "██║      ██║      ██║    ██╔══╝   ",
+    "███████╗ ██║      ██║    ███████╗ ",
+    "╚══════╝ ╚═╝      ╚═╝    ╚══════╝ ",
 ];
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -496,17 +499,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y + (area.height - height) / 2,
         width,
         height,
-    }
-}
-
-pub fn status_label(status: PlaybackStatus) -> &'static str {
-    match status {
-        PlaybackStatus::Loading => "\u{2026}",
-        PlaybackStatus::Playing => "\u{25b6}",
-        PlaybackStatus::Paused => "\u{23f8}",
-        PlaybackStatus::Stopped => "\u{25a0}",
-        PlaybackStatus::Finished => "\u{2713}",
-        PlaybackStatus::Error => "!",
     }
 }
 
@@ -535,6 +527,13 @@ pub fn hit_test(area: Rect, app: &App, event: MouseEvent) -> Option<Action> {
         MouseEventKind::Down(MouseButton::Left) => {
             if contains(geo.tabs, event.column, event.row) {
                 return tab_at(geo.tabs, event.column).map(Action::SwitchView);
+            }
+            if app.view == View::NowPlaying {
+                let progress = track::progress_rect(track_area(&geo));
+                if contains(progress, event.column, event.row) {
+                    return seek_rect(progress, event.column, app).map(Action::SeekTo);
+                }
+                return None;
             }
             if contains(geo.player, event.column, event.row) {
                 return seek_at(geo.player, event.column, app).map(Action::SeekTo);
@@ -614,6 +613,16 @@ fn seek_at(player: Rect, x: u16, app: &App) -> Option<u64> {
         return Some(0);
     }
     let fraction = ((x - inner_x).min(inner_w) as f64) / inner_w as f64;
+    Some((fraction * app.duration as f64).round() as u64)
+}
+
+/// Maps a click inside the borderless Track progress row to a timestamp.
+fn seek_rect(rect: Rect, x: u16, app: &App) -> Option<u64> {
+    if app.duration == 0 || rect.width == 0 {
+        return None;
+    }
+    let clamped = x.clamp(rect.x, rect.x + rect.width - 1);
+    let fraction = (clamped - rect.x) as f64 / rect.width as f64;
     Some((fraction * app.duration as f64).round() as u64)
 }
 

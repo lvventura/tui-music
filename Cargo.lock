@@ -1035,6 +1035,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lite-music"
+version = "0.1.0"
+dependencies = [
+ "crossterm 0.29.0",
+ "dirs",
+ "futures-util",
+ "image",
+ "ratatui",
+ "reqwest",
+ "rodio",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "litemap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2959,27 +2980,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "synstructure",
-]
-
-[[package]]
-name = "yt-dj"
-version = "0.1.0"
-dependencies = [
- "crossterm 0.29.0",
- "dirs",
- "futures-util",
- "image",
- "ratatui",
- "reqwest",
- "rodio",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

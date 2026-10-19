@@ -158,6 +158,15 @@ fn parse_hex(value: &str) -> Option<Color> {
     Some(rgb_from_u32(parsed))
 }
 
+/// Linear interpolation between two colours (`t` clamped to `0.0..=1.0`).
+pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let (ar, ag, ab) = to_rgb(a);
+    let (br, bg, bb) = to_rgb(b);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+}
+
 fn to_rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Rgb(r, g, b) => (r, g, b),

@@ -1,7 +1,9 @@
 pub mod cover;
+pub mod glyphs;
 pub mod keymap;
 pub mod layout;
 pub mod theme;
+pub mod track;
 
 use ratatui::Frame;
 

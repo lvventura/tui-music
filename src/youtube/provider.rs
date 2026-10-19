@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::process::Command;
 use tracing::{debug, warn};
@@ -17,7 +16,7 @@ use crate::{cache::Cache, config::Settings, metrics::Metrics};
 
 use super::models::Song;
 
-const AUDIO_FORMAT: &str = "bestaudio[ext=m4a]/140";
+const AUDIO_FORMAT: &str = "bestaudio[ext=m4a]/bestaudio/best";
 const AUDIO_CONTAINER: &str = "mp4";
 const AUDIO_CODEC: &str = "aac";
 
@@ -104,7 +103,6 @@ impl Seek for AudioStreamReader {
 #[derive(Clone)]
 pub struct YtDlpProvider {
     executable: String,
-    http: reqwest::Client,
     search_cache: Arc<Mutex<Cache<String, Vec<Song>>>>,
     timeout: Duration,
     resolve_timeout: Duration,
@@ -120,12 +118,6 @@ impl YtDlpProvider {
         let timeout = Duration::from_secs(settings.network.request_timeout_seconds);
         Self {
             executable: executable.into(),
-            http: reqwest::Client::builder()
-                // A total request timeout would abort a valid long-running audio body.
-                .connect_timeout(timeout)
-                .http1_only()
-                .build()
-                .unwrap_or_default(),
             search_cache: Arc::new(Mutex::new(Cache::new(
                 settings.cache.memory_capacity,
                 Duration::from_secs(settings.cache.search_ttl_seconds),
@@ -243,96 +235,135 @@ impl YtDlpProvider {
         Err(AppError::Provider("fallo inesperado del proveedor".into()))
     }
 
-    async fn open_audio_stream(&self, url: &str) -> AppResult<AudioStream> {
-        let request_url = sanitize_url(url);
-        let response = self
-            .http
-            .get(url)
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(|error| {
-                warn!(url = %request_url, error = %error, "audio HTTP request failed");
-                AppError::Provider(format!(
-                    "audio HTTP request failed for {request_url}: {error}"
-                ))
-            })?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        debug!(
-            url = %request_url,
-            status = %status,
-            content_type = ?headers.get(reqwest::header::CONTENT_TYPE),
-            content_encoding = ?headers.get(reqwest::header::CONTENT_ENCODING),
-            content_length = ?headers.get(reqwest::header::CONTENT_LENGTH),
-            server = ?headers.get(reqwest::header::SERVER),
-            "audio HTTP response"
-        );
-        if !status.is_success() {
-            let body = response.bytes().await.map_err(|error| {
-                AppError::Provider(format!(
-                    "audio HTTP status {status}; body read failed: {error}"
-                ))
-            })?;
-            warn!(url = %request_url, %status, "audio HTTP request was rejected");
-            return Err(AppError::Provider(format!(
-                "audio HTTP status {status} for {request_url}: {}",
-                preview_body(&body),
-            )));
+    /// Downloads the audio with yt-dlp into a temporary file and streams that
+    /// file into the decoder. yt-dlp is the only reliable way to fetch
+    /// googlevideo URLs (it resolves `n` signatures and PO tokens), and some
+    /// videos only expose a muxed stream, so extracting to an audio-only m4a
+    /// keeps playback robust. The temp file is removed after it is read.
+    async fn open_audio_stream(&self, page: &str) -> AppResult<AudioStream> {
+        let base = std::env::temp_dir().join(format!(
+            "yt-dj-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or_default()
+        ));
+        let template = format!("{}.%(ext)s", base.display());
+
+        let mut stderr = String::new();
+        let mut path = None;
+        // Preferred: extract audio-only m4a (needs ffmpeg, bundled with yt-dlp).
+        let (success, error) = self
+            .run_download(&[
+                "-f",
+                AUDIO_FORMAT,
+                "-x",
+                "--audio-format",
+                "m4a",
+                "--no-playlist",
+                "--no-progress",
+                "--no-warnings",
+                "-o",
+                &template,
+                page,
+            ])
+            .await?;
+        if success {
+            path = find_download(&base);
+        } else {
+            warn!(stderr = %error.trim(), "yt-dlp -x falló, reintentando sin extracción");
         }
-        let content_type = headers
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
+        // Fallback: plain audio-only download (no ffmpeg needed).
+        if path.is_none() {
+            let (success, error) = self
+                .run_download(&[
+                    "-f",
+                    "bestaudio[ext=m4a]/bestaudio",
+                    "--no-playlist",
+                    "--no-progress",
+                    "--no-warnings",
+                    "-o",
+                    &template,
+                    page,
+                ])
+                .await?;
+            if success {
+                path = find_download(&base);
+            } else {
+                stderr = error;
+            }
+        }
+
+        let path = path.ok_or_else(|| {
+            AppError::Provider(format!(
+                "yt-dlp no generó audio: {}",
+                first_line(stderr.trim())
+            ))
+        })?;
+        let bytes = tokio::fs::read(&path).await.map_err(|error| {
+            AppError::Provider(format!("no se pudo leer {}: {error}", path.display()))
+        })?;
+        let _ = tokio::fs::remove_file(&path).await;
+        if bytes.is_empty() {
+            return Err(AppError::Provider("yt-dlp generó un archivo vacío".into()));
+        }
+        debug!(bytes = bytes.len(), "[STREAM] audio downloaded");
         let (sender, receiver) = tokio::sync::mpsc::channel(8);
         tokio::spawn(async move {
-            let mut stream = response.bytes_stream();
-            let mut chunks = 0u64;
-            let mut total_bytes = 0u64;
-            while let Some(chunk) = stream.next().await {
-                let result = match chunk {
-                    Ok(bytes) => {
-                        chunks += 1;
-                        total_bytes += bytes.len() as u64;
-                        debug!(
-                            chunk = chunks,
-                            bytes = bytes.len(),
-                            total_bytes,
-                            "[STREAM] chunk received"
-                        );
-                        Ok(Some(bytes.to_vec()))
-                    }
-                    Err(error) => {
-                        warn!(
-                            chunks,
-                            total_bytes,
-                            error = %error,
-                            "[STREAM] body error"
-                        );
-                        Err(format!("audio stream body error: {error}"))
-                    }
-                };
-                if sender.send(result).await.is_err() {
-                    debug!(
-                        chunks,
-                        total_bytes, "[STREAM] consumer dropped before producer EOF"
-                    );
-                    break;
+            for chunk in bytes.chunks(64 * 1024) {
+                if sender.send(Ok(Some(chunk.to_vec()))).await.is_err() {
+                    return;
                 }
             }
-            debug!(chunks, total_bytes, "[STREAM] EOF received");
             let _ = sender.send(Ok(None)).await;
         });
-        debug!(url = %request_url, "audio stream opened");
         Ok(AudioStream {
             reader: AudioStreamReader {
                 receiver: std::sync::Mutex::new(receiver),
                 pending: VecDeque::new(),
                 finished: false,
             },
-            content_type,
+            content_type: Some("audio/mp4".into()),
         })
     }
+
+    async fn run_download(&self, args: &[&str]) -> AppResult<(bool, String)> {
+        let mut command = Command::new(&self.executable);
+        command.args(self.cookie_args());
+        command.args(args);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let output = tokio::time::timeout(Duration::from_secs(180), command.output())
+            .await
+            .map_err(|_| AppError::Provider("agotado el tiempo descargando el audio".into()))?
+            .map_err(|error| AppError::Provider(format!("no se pudo iniciar yt-dlp: {error}")))?;
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        Ok((output.status.success(), stderr))
+    }
+}
+
+/// Finds the file yt-dlp produced for the given output template base.
+fn find_download(base: &std::path::Path) -> Option<PathBuf> {
+    let directory = base.parent()?;
+    let prefix = base.file_name()?.to_string_lossy().into_owned();
+    std::fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            name.starts_with(&prefix) && !name.ends_with(".part") && name.contains('.')
+        })
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("")
 }
 
 impl MusicProvider for YtDlpProvider {
@@ -396,25 +427,9 @@ impl MusicProvider for YtDlpProvider {
                 format = AUDIO_FORMAT,
                 container = AUDIO_CONTAINER,
                 codec = AUDIO_CODEC,
-                "resolving audio format with yt-dlp"
+                "downloading audio with yt-dlp"
             );
-            let output = provider
-                .command_authed(
-                    &["-f", AUDIO_FORMAT, "-g", "--no-playlist", &page],
-                    provider.resolve_timeout,
-                )
-                .await?;
-            let url =
-                String::from_utf8(output).map_err(|error| AppError::Provider(error.to_string()))?;
-            for attempt in 0..=provider.retries {
-                match provider.open_audio_stream(url.trim()).await {
-                    Ok(stream) => return Ok(stream),
-                    Err(error) if attempt == provider.retries => return Err(error),
-                    Err(_) => tokio::time::sleep(provider.retry_delay * 2u32.pow(attempt)).await,
-                }
-            }
-
-            Err(AppError::Provider("fallo descargando audio".into()))
+            provider.open_audio_stream(&page).await
         })
     }
 
@@ -482,50 +497,11 @@ impl From<YtDlpSong> for Song {
     }
 }
 
-fn sanitize_url(url: &str) -> String {
-    reqwest::Url::parse(url)
-        .map(|parsed| {
-            format!(
-                "{}://{}{}",
-                parsed.scheme(),
-                parsed.host_str().unwrap_or("<unknown-host>"),
-                parsed.path()
-            )
-        })
-        .unwrap_or_else(|_| "<invalid-url>".into())
-}
-
-fn preview_body(body: &[u8]) -> String {
-    let preview = &body[..body.len().min(1000)];
-    match std::str::from_utf8(preview) {
-        Ok(text) => text.replace('\r', "\\r").replace('\n', "\\n"),
-        Err(_) => preview
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(" "),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Read;
 
-    use super::{AudioStreamReader, preview_body, sanitize_url};
-
-    #[test]
-    fn diagnostics_never_expose_signed_url_query() {
-        assert_eq!(
-            sanitize_url("https://audio.example.test/path?token=secret"),
-            "https://audio.example.test/path"
-        );
-    }
-
-    #[test]
-    fn body_preview_handles_text_and_binary_without_invalid_utf8_slicing() {
-        assert_eq!(preview_body(b"status\nerror"), "status\\nerror");
-        assert_eq!(preview_body(&[0xff, 0x00, 0x01]), "ff 00 01");
-    }
+    use super::AudioStreamReader;
 
     #[test]
     fn audio_reader_streams_chunks_and_reports_end() {

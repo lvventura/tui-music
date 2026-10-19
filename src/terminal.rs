@@ -28,17 +28,6 @@ impl TerminalCaps {
             image: detect_image_protocol(truecolor),
         }
     }
-
-    /// One-line recommendation shown in the footer when the terminal cannot
-    /// render the intended colours. `None` means nothing to report.
-    pub fn note(&self) -> Option<String> {
-        if self.truecolor {
-            return None;
-        }
-        Some(
-            "Terminal sin truecolor: se usan 256 colores. Recomendado: Windows Terminal".into(),
-        )
-    }
 }
 
 fn colorterm_reports_truecolor() -> bool {
@@ -114,28 +103,7 @@ fn classify_image(
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageProtocol, TerminalCaps, classify_image};
-
-    #[test]
-    fn truecolor_terminals_have_no_note() {
-        let caps = TerminalCaps {
-            truecolor: true,
-            windows_terminal: true,
-            image: ImageProtocol::HalfBlock,
-        };
-        assert!(caps.note().is_none());
-    }
-
-    #[test]
-    fn plain_terminals_get_a_degradation_note() {
-        let caps = TerminalCaps {
-            truecolor: false,
-            windows_terminal: false,
-            image: ImageProtocol::None,
-        };
-        let note = caps.note().expect("a note is required");
-        assert!(note.contains("256"));
-    }
+    use super::{ImageProtocol, classify_image};
 
     #[test]
     fn kitty_terminals_are_detected() {
